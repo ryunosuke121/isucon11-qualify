@@ -1088,79 +1088,81 @@ func calculateConditionLevel(condition string) (string, error) {
 // GET /api/trend
 // ISUの性格毎の最新のコンディション情報
 func getTrend(c echo.Context) error {
-	characterList := []Isu{}
-	err := db.Select(&characterList, "SELECT `character` FROM `isu` GROUP BY `character`")
-	if err != nil {
+	type Result struct {
+		Character string    `db:"character"`
+		ID        int       `db:"id"`
+		Timestamp time.Time `db:"timestamp"`
+		Condition string    `db:"condition"`
+	}
+
+	// 1回のSQLで必要なデータを全て取得
+	results := []Result{}
+	query := `
+		SELECT 
+			i.character,
+			i.id,
+			ic.timestamp,
+			ic.condition
+		FROM isu i
+		INNER JOIN (
+			SELECT 
+				jia_isu_uuid,
+				MAX(timestamp) as max_timestamp
+			FROM isu_condition
+			GROUP BY jia_isu_uuid
+		) latest ON i.jia_isu_uuid = latest.jia_isu_uuid
+		INNER JOIN isu_condition ic 
+			ON i.jia_isu_uuid = ic.jia_isu_uuid 
+			AND ic.timestamp = latest.max_timestamp
+		ORDER BY i.character, ic.timestamp DESC`
+
+	if err := db.Select(&results, query); err != nil {
 		c.Logger().Errorf("db error: %v", err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
 
-	res := []TrendResponse{}
+	// キャラクターごとの結果をマップで整理
+	characterMap := make(map[string]*TrendResponse)
 
-	for _, character := range characterList {
-		isuList := []Isu{}
-		err = db.Select(&isuList,
-			"SELECT * FROM `isu` WHERE `character` = ?",
-			character.Character,
-		)
+	for _, r := range results {
+		// キャラクターの結果を初期化（まだ存在しない場合）
+		if _, exists := characterMap[r.Character]; !exists {
+			characterMap[r.Character] = &TrendResponse{
+				Character: r.Character,
+				Info:      []*TrendCondition{},
+				Warning:   []*TrendCondition{},
+				Critical:  []*TrendCondition{},
+			}
+		}
+
+		// コンディションレベルを計算
+		conditionLevel, err := calculateConditionLevel(r.Condition)
 		if err != nil {
-			c.Logger().Errorf("db error: %v", err)
+			c.Logger().Error(err)
 			return c.NoContent(http.StatusInternalServerError)
 		}
 
-		characterInfoIsuConditions := []*TrendCondition{}
-		characterWarningIsuConditions := []*TrendCondition{}
-		characterCriticalIsuConditions := []*TrendCondition{}
-		for _, isu := range isuList {
-			conditions := []IsuCondition{}
-			err = db.Select(&conditions,
-				"SELECT * FROM `isu_condition` WHERE `jia_isu_uuid` = ? ORDER BY timestamp DESC",
-				isu.JIAIsuUUID,
-			)
-			if err != nil {
-				c.Logger().Errorf("db error: %v", err)
-				return c.NoContent(http.StatusInternalServerError)
-			}
-
-			if len(conditions) > 0 {
-				isuLastCondition := conditions[0]
-				conditionLevel, err := calculateConditionLevel(isuLastCondition.Condition)
-				if err != nil {
-					c.Logger().Error(err)
-					return c.NoContent(http.StatusInternalServerError)
-				}
-				trendCondition := TrendCondition{
-					ID:        isu.ID,
-					Timestamp: isuLastCondition.Timestamp.Unix(),
-				}
-				switch conditionLevel {
-				case "info":
-					characterInfoIsuConditions = append(characterInfoIsuConditions, &trendCondition)
-				case "warning":
-					characterWarningIsuConditions = append(characterWarningIsuConditions, &trendCondition)
-				case "critical":
-					characterCriticalIsuConditions = append(characterCriticalIsuConditions, &trendCondition)
-				}
-			}
-
+		// トレンドコンディションを作成
+		trendCond := &TrendCondition{
+			ID:        r.ID,
+			Timestamp: r.Timestamp.Unix(),
 		}
 
-		sort.Slice(characterInfoIsuConditions, func(i, j int) bool {
-			return characterInfoIsuConditions[i].Timestamp > characterInfoIsuConditions[j].Timestamp
-		})
-		sort.Slice(characterWarningIsuConditions, func(i, j int) bool {
-			return characterWarningIsuConditions[i].Timestamp > characterWarningIsuConditions[j].Timestamp
-		})
-		sort.Slice(characterCriticalIsuConditions, func(i, j int) bool {
-			return characterCriticalIsuConditions[i].Timestamp > characterCriticalIsuConditions[j].Timestamp
-		})
-		res = append(res,
-			TrendResponse{
-				Character: character.Character,
-				Info:      characterInfoIsuConditions,
-				Warning:   characterWarningIsuConditions,
-				Critical:  characterCriticalIsuConditions,
-			})
+		// レベルに応じて適切な配列に追加
+		switch conditionLevel {
+		case "info":
+			characterMap[r.Character].Info = append(characterMap[r.Character].Info, trendCond)
+		case "warning":
+			characterMap[r.Character].Warning = append(characterMap[r.Character].Warning, trendCond)
+		case "critical":
+			characterMap[r.Character].Critical = append(characterMap[r.Character].Critical, trendCond)
+		}
+	}
+
+	// マップから配列に変換
+	res := make([]TrendResponse, 0, len(characterMap))
+	for _, tr := range characterMap {
+		res = append(res, *tr)
 	}
 
 	return c.JSON(http.StatusOK, res)
