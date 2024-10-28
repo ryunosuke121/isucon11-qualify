@@ -36,4 +36,4 @@ CREATE TABLE `isu_association_config` (
   `url` VARCHAR(255) NOT NULL UNIQUE
 ) ENGINE=InnoDB DEFAULT CHARACTER SET=utf8mb4;
 
-CREATE INDEX isu_condition_jia_isu_uuid_IDX USING BTREE ON isucondition.isu_condition (jia_isu_uuid,`timestamp`);
+CREATE INDEX isu_condition_jia_isu_uuid_IDX USING BTREE ON isucondition.isu_condition (jia_isu_uuid,`timestamp` DESC);
