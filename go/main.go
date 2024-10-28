@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1156,6 +1157,22 @@ func getTrend(c echo.Context) error {
 		case "critical":
 			characterMap[r.Character].Critical = append(characterMap[r.Character].Critical, trendCond)
 		}
+	}
+
+	// 各キャラクターのコンディションをソート
+	for _, tr := range characterMap {
+		// Infoのソート
+		sort.Slice(tr.Info, func(i, j int) bool {
+			return tr.Info[i].Timestamp > tr.Info[j].Timestamp
+		})
+		// Warningのソート
+		sort.Slice(tr.Warning, func(i, j int) bool {
+			return tr.Warning[i].Timestamp > tr.Warning[j].Timestamp
+		})
+		// Criticalのソート
+		sort.Slice(tr.Critical, func(i, j int) bool {
+			return tr.Critical[i].Timestamp > tr.Critical[j].Timestamp
+		})
 	}
 
 	// マップから配列に変換
